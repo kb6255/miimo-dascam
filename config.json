@@ -1,0 +1,8 @@
+{
+  "video_width": 1280,
+  "video_height": 720,
+  "split_minute": 1,
+  "enable_watermark": true,
+  "cycle_storage_gb": 30,
+  "warn_space_gb": 5
+}
