@@ -9,7 +9,7 @@ from datetime import datetime
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QLabel, QHBoxLayout, QVBoxLayout, QWidget,
     QPushButton, QListWidget, QListWidgetItem, QFrame, QSlider, QStyle,
-    QDialog, QSpinBox, QCheckBox, QProgressBar, QComboBox
+    QDialog, QSpinBox, QCheckBox, QProgressBar, QComboBox, QMenu
 )
 from PyQt5.QtGui import QImage, QPixmap, QFont
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
@@ -576,6 +576,9 @@ class MainWindow(QMainWindow):
 
         self.showFullScreen()
 
+        # 开机自动开始录制（延迟2秒等摄像头就绪）
+        QTimer.singleShot(2000, self.start_rec)
+
     def init_ui(self):
         central = QWidget()
         central.setStyleSheet("background:#000;")
@@ -722,6 +725,8 @@ class MainWindow(QMainWindow):
             QListWidget::item:hover{background:#333;}
         """)
         self.video_list.itemDoubleClicked.connect(self.play_video)
+        self.video_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.video_list.customContextMenuRequested.connect(self._video_ctx_menu)
         g_layout.addWidget(self.video_list, 1)
 
         self.photo_list = QListWidget()
@@ -732,6 +737,8 @@ class MainWindow(QMainWindow):
             QListWidget::item:hover{background:#333;}
         """)
         self.photo_list.itemDoubleClicked.connect(self.view_photo)
+        self.photo_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.photo_list.customContextMenuRequested.connect(self._photo_ctx_menu)
         self.photo_list.setVisible(False)
         g_layout.addWidget(self.photo_list, 1)
 
@@ -891,11 +898,15 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             self.need_lock = False
+            self.status_label.setText(f"锁定已保存: {fname}")
         dt = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.current_video_path = os.path.join(self.save_root, f"{dt}.mp4")
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         self.writer = cv2.VideoWriter(self.current_video_path, fourcc, 30, (self.W, self.H))
         self.rec_start_time = time.time()
+        if self.is_rec:
+            self.status_label.setStyleSheet("color:red;font-size:12px;font-weight:bold;padding:4px;")
+            self.status_label.setText(f"录像中: {self.current_video_path}")
 
     # ---- 模式 ----
     def switch_mode(self):
@@ -928,6 +939,62 @@ class MainWindow(QMainWindow):
     def hide_gallery(self):
         self.player_overlay._close()
         self.gallery_panel.setVisible(False)
+
+    def _video_ctx_menu(self, pos):
+        item = self.video_list.itemAt(pos)
+        if not item:
+            return
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu{background:#333;color:#fff;border:1px solid #555;}
+            QMenu::item{padding:8px 24px;color:#fff;}
+            QMenu::item:selected{background:#36c;}
+        """)
+        act_del = menu.addAction("删除")
+        act_lock = menu.addAction("锁定")
+        fpath = item.data(Qt.UserRole)
+        row = self.video_list.row(item)
+        act_del.triggered.connect(lambda: self._delete_file(fpath, row, self.video_list))
+        act_lock.triggered.connect(lambda: self._lock_file(fpath))
+        menu.popup(self.video_list.mapToGlobal(pos))
+
+    def _lock_file(self, fpath):
+        if not fpath:
+            return
+        fname = os.path.basename(fpath)
+        dst = os.path.join(self.lock_root, f"LOCK_{fname}")
+        try:
+            subprocess.run(["cp", fpath, dst], check=True)
+            self.status_label.setText(f"已锁定: {fname}")
+        except Exception as e:
+            self.status_label.setText(f"锁定失败: {e}")
+
+    def _photo_ctx_menu(self, pos):
+        item = self.photo_list.itemAt(pos)
+        if not item:
+            return
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu{background:#333;color:#fff;border:1px solid #555;}
+            QMenu::item{padding:8px 24px;color:#fff;}
+            QMenu::item:selected{background:#36c;}
+        """)
+        act_del = menu.addAction("删除")
+        fpath = item.data(Qt.UserRole)
+        row = self.photo_list.row(item)
+        act_del.triggered.connect(lambda: self._delete_file(fpath, row, self.photo_list))
+        menu.popup(self.photo_list.mapToGlobal(pos))
+
+    def _delete_file(self, fpath, row, list_widget):
+        if not fpath or not os.path.exists(fpath):
+            return
+        fname = os.path.basename(fpath)
+        try:
+            os.remove(fpath)
+            list_widget.takeItem(row)
+            self.status_label.setText(f"已删除: {fname}")
+        except Exception as e:
+            self.status_label.setText(f"删除失败: {e}")
 
     def _switch_tab(self, tab):
         if tab == "video":
