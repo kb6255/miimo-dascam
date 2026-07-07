@@ -594,7 +594,19 @@ class MainWindow(QMainWindow):
         if not self.cfg["enable_watermark"]:
             return frame
         dt_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cv2.putText(frame, dt_str, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        h, w = frame.shape[:2]
+        # 文字尺寸
+        font_scale = 0.6
+        thickness = 2
+        (tw, th), baseline = cv2.getTextSize(dt_str, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+        # 居中放置，底部留边距
+        tx = (w - tw) // 2
+        ty = h - 16
+        # 半透明黑色背景
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (tx - 8, ty - th - 6), (tx + tw + 8, ty + baseline + 4), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
+        cv2.putText(frame, dt_str, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 255), thickness)
         return frame
 
     def composite_frame(self, f0, f1):
@@ -729,6 +741,7 @@ class MainWindow(QMainWindow):
         self.refresh_files()
 
     def hide_gallery(self):
+        self.player_overlay._close()
         self.gallery_panel.setVisible(False)
 
     def _switch_tab(self, tab):
