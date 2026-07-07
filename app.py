@@ -54,6 +54,22 @@ def get_usb_dir():
         pass
     return os.path.expanduser("~/record_backup")
 
+def cover_scale(pixmap, target_w, target_h):
+    """等比缩放并裁剪居中，铺满目标区域"""
+    if pixmap.isNull() or target_w <= 0 or target_h <= 0:
+        return pixmap
+    pw, ph = pixmap.width(), pixmap.height()
+    # 计算放大比例（取较大的那个，确保铺满）
+    scale = max(target_w / pw, target_h / ph)
+    new_w = int(pw * scale)
+    new_h = int(ph * scale)
+    scaled = pixmap.scaled(new_w, new_h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+    # 居中裁剪
+    x = (new_w - target_w) // 2
+    y = (new_h - target_h) // 2
+    return scaled.copy(x, y, target_w, target_h)
+
+
 def clean_old_videos(save_root, limit_gb):
     all_videos = []
     for fname in os.listdir(save_root):
@@ -246,7 +262,7 @@ class PlayerOverlay(QWidget):
         if not pixmap.isNull():
             pw = self.parent().width() if self.parent() else self.width()
             ph = self.parent().height() if self.parent() else self.height()
-            self.preview.setPixmap(pixmap.scaled(pw, ph, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.preview.setPixmap(cover_scale(pixmap, pw, ph))
 
         if self.parent():
             self.setGeometry(self.parent().rect())
@@ -289,7 +305,7 @@ class PlayerOverlay(QWidget):
         pw = self.preview.width()
         ph = self.preview.height()
         if pw > 10 and ph > 10:
-            pix = pix.scaled(pw, ph, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            pix = cover_scale(pix, pw, ph)
         self.preview.setPixmap(pix)
 
     def _toggle_play(self):
@@ -388,9 +404,11 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         central = QWidget()
+        central.setStyleSheet("background:#000;")
         self.setCentralWidget(central)
         main_layout = QHBoxLayout(central)
         main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
         # ---- 左侧：监控画面 + 按钮 ----
         left_widget = QWidget()
@@ -420,9 +438,9 @@ class MainWindow(QMainWindow):
         ctrl.setSpacing(8)
 
         self.btn_rec = QPushButton("开始录像")
-        self.btn_rec.setFixedHeight(44)
+        self.btn_rec.setFixedHeight(52)
         self.btn_rec.setStyleSheet("""
-            QPushButton{background:#c33;color:#fff;font-size:15px;font-weight:bold;
+            QPushButton{background:#c33;color:#fff;font-size:17px;font-weight:bold;
                         border-radius:6px;padding:0 20px;}
             QPushButton:hover{background:#e44;}
         """)
@@ -430,9 +448,9 @@ class MainWindow(QMainWindow):
         ctrl.addWidget(self.btn_rec)
 
         self.btn_mode = QPushButton("前进模式")
-        self.btn_mode.setFixedHeight(44)
+        self.btn_mode.setFixedHeight(52)
         self.btn_mode.setStyleSheet("""
-            QPushButton{background:#36c;color:#fff;font-size:15px;font-weight:bold;
+            QPushButton{background:#36c;color:#fff;font-size:17px;font-weight:bold;
                         border-radius:6px;padding:0 20px;}
             QPushButton:hover{background:#48e;}
         """)
@@ -440,9 +458,9 @@ class MainWindow(QMainWindow):
         ctrl.addWidget(self.btn_mode)
 
         btn_snap = QPushButton("截图")
-        btn_snap.setFixedHeight(44)
+        btn_snap.setFixedHeight(52)
         btn_snap.setStyleSheet("""
-            QPushButton{background:#c93;color:#fff;font-size:15px;font-weight:bold;
+            QPushButton{background:#c93;color:#fff;font-size:17px;font-weight:bold;
                         border-radius:6px;padding:0 20px;}
             QPushButton:hover{background:#ea4;}
         """)
@@ -450,9 +468,9 @@ class MainWindow(QMainWindow):
         ctrl.addWidget(btn_snap)
 
         btn_lock = QPushButton("锁定视频")
-        btn_lock.setFixedHeight(44)
+        btn_lock.setFixedHeight(52)
         btn_lock.setStyleSheet("""
-            QPushButton{background:#93c;color:#fff;font-size:15px;font-weight:bold;
+            QPushButton{background:#93c;color:#fff;font-size:17px;font-weight:bold;
                         border-radius:6px;padding:0 20px;}
             QPushButton:hover{background:#b5e;}
         """)
@@ -460,9 +478,9 @@ class MainWindow(QMainWindow):
         ctrl.addWidget(btn_lock)
 
         btn_gallery = QPushButton("相册/录像")
-        btn_gallery.setFixedHeight(44)
+        btn_gallery.setFixedHeight(52)
         btn_gallery.setStyleSheet("""
-            QPushButton{background:#555;color:#fff;font-size:15px;font-weight:bold;
+            QPushButton{background:#555;color:#fff;font-size:17px;font-weight:bold;
                         border-radius:6px;padding:0 20px;}
             QPushButton:hover{background:#777;}
         """)
@@ -614,7 +632,8 @@ class MainWindow(QMainWindow):
         rgb = cv2.cvtColor(comp, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
         qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
-        pix = QPixmap.fromImage(qimg).scaled(self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        pix = QPixmap.fromImage(qimg)
+        pix = cover_scale(pix, self.preview.width(), self.preview.height())
         self.preview.setPixmap(pix)
 
     # ---- 录像 ----
@@ -633,7 +652,7 @@ class MainWindow(QMainWindow):
         self.is_rec = True
         self.btn_rec.setText("停止录像")
         self.btn_rec.setStyleSheet("""
-            QPushButton{background:#3a3;color:#fff;font-size:15px;font-weight:bold;
+            QPushButton{background:#3a3;color:#fff;font-size:17px;font-weight:bold;
                         border-radius:6px;padding:0 20px;}
             QPushButton:hover{background:#4c4;}
         """)
@@ -655,7 +674,7 @@ class MainWindow(QMainWindow):
             self.need_lock = False
         self.btn_rec.setText("开始录像")
         self.btn_rec.setStyleSheet("""
-            QPushButton{background:#c33;color:#fff;font-size:15px;font-weight:bold;
+            QPushButton{background:#c33;color:#fff;font-size:17px;font-weight:bold;
                         border-radius:6px;padding:0 20px;}
             QPushButton:hover{background:#e44;}
         """)
