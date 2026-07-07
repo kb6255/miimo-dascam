@@ -65,12 +65,10 @@ def cover_scale(pixmap, target_w, target_h):
     if pixmap.isNull() or target_w <= 0 or target_h <= 0:
         return pixmap
     pw, ph = pixmap.width(), pixmap.height()
-    # 计算放大比例（取较大的那个，确保铺满）
     scale = max(target_w / pw, target_h / ph)
     new_w = int(pw * scale)
     new_h = int(ph * scale)
-    scaled = pixmap.scaled(new_w, new_h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
-    # 居中裁剪
+    scaled = pixmap.scaled(new_w, new_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
     x = (new_w - target_w) // 2
     y = (new_h - target_h) // 2
     return scaled.copy(x, y, target_w, target_h)
@@ -378,6 +376,10 @@ class PlayerOverlay(QWidget):
         self.playing = True
         self._play_list = play_list or [path]
         self._play_index = 0
+        # 清空监控画面
+        main_win = self.window()
+        if hasattr(main_win, 'preview'):
+            main_win.preview.clear()
         self._open_file(path)
 
     def _open_file(self, path):
@@ -423,6 +425,11 @@ class PlayerOverlay(QWidget):
         self.ctrl_bar.setVisible(False)
         self.preview.clear()
 
+        # 清空监控画面
+        main_win = self.window()
+        if hasattr(main_win, 'preview'):
+            main_win.preview.clear()
+
         pixmap = QPixmap(path)
         if not pixmap.isNull():
             pw = self.parent().width() if self.parent() else self.width()
@@ -458,10 +465,17 @@ class PlayerOverlay(QWidget):
                 # 连续播放：下一个视频
                 self._play_index = idx + 1
                 self._open_file(play_list[self._play_index])
+            elif len(play_list) > 1:
+                # 连续播放：全部播完，回到第一个循环
+                self._play_index = 0
+                self._open_file(play_list[0])
             else:
-                # 播放结束，停止
+                # 单次播放：停止，回到起始位置以便再次播放
                 self.playing = False
                 self.btn_play.setText("\u25b6")
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                self.seek_bar.setValue(0)
+                self.time_current.setText("00:00")
             return
         # 更新进度条
         cur = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
@@ -514,6 +528,10 @@ class PlayerOverlay(QWidget):
     def _close(self):
         self._stop()
         self.setVisible(False)
+        # 恢复监控画面
+        main_win = self.window()
+        if hasattr(main_win, 'update_frame'):
+            main_win.update_frame()
 
     def _fmt_time(self, seconds):
         m = int(seconds) // 60
@@ -793,7 +811,7 @@ class MainWindow(QMainWindow):
         (tw, th), baseline = cv2.getTextSize(dt_str, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
         # 居中放置，底部留边距
         tx = (w - tw) // 2
-        ty = h - 16
+        ty = h - 50
         # 半透明黑色背景
         overlay = frame.copy()
         cv2.rectangle(overlay, (tx - 8, ty - th - 6), (tx + tw + 8, ty + baseline + 4), (0, 0, 0), -1)
@@ -814,9 +832,10 @@ class MainWindow(QMainWindow):
             main = f1.copy()
             small = cv2.resize(f0, (small_w, small_h))
         cv2.rectangle(small, (0, 0), (small_w - 1, small_h - 1), (255, 255, 255), 3)
-        main[0:small_h, self.W - small_w:self.W, :] = small
+        margin = small_h // 8
+        main[margin:margin + small_h, self.W - small_w:self.W, :] = small
         mode_text = "FWD" if self.car_mode == 0 else "REV"
-        cv2.putText(main, mode_text, (self.W - 80, self.H - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 0), 2)
+        cv2.putText(main, mode_text, (self.W - 80, self.H - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 0), 2)
         return self.add_watermark(main)
 
     def update_frame(self):
@@ -837,7 +856,10 @@ class MainWindow(QMainWindow):
         h, w, ch = rgb.shape
         qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
         pix = QPixmap.fromImage(qimg)
-        pix = cover_scale(pix, self.preview.width(), self.preview.height())
+        pw = self.preview.width()
+        ph = self.preview.height()
+        if pw > 10 and ph > 10:
+            pix = cover_scale(pix, pw, ph)
         self.preview.setPixmap(pix)
 
     # ---- 录像 ----
