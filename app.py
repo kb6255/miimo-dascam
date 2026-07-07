@@ -8,7 +8,8 @@ import subprocess
 from datetime import datetime
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QLabel, QHBoxLayout, QVBoxLayout, QWidget,
-    QPushButton, QListWidget, QListWidgetItem, QFrame, QSlider, QStyle
+    QPushButton, QListWidget, QListWidgetItem, QFrame, QSlider, QStyle,
+    QDialog, QSpinBox, QCheckBox, QProgressBar, QComboBox
 )
 from PyQt5.QtGui import QImage, QPixmap, QFont
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
@@ -22,6 +23,7 @@ DEFAULT_CFG = {
     "enable_watermark": True,
     "cycle_storage_gb": 30,
     "warn_space_gb": 5,
+    "play_mode": "single",
 }
 
 def load_config():
@@ -31,6 +33,10 @@ def load_config():
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(DEFAULT_CFG, f, indent=2)
     return DEFAULT_CFG.copy()
+
+def save_config(cfg):
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
 
 def get_usb_dir():
     try:
@@ -121,6 +127,156 @@ class CameraThread(QThread):
 
     def stop(self):
         self.running = False
+
+
+# ====================== 设置对话框 ======================
+class SettingsDialog(QDialog):
+    def __init__(self, cfg, parent=None):
+        super().__init__(parent)
+        self.cfg = cfg
+        self.result_cfg = {}
+        self.setWindowTitle("设置")
+        self.setFixedSize(400, 480)
+        self.setStyleSheet("""
+            QDialog{background:#222;color:#fff;}
+            QLabel{font-size:14px;}
+            QSpinBox{background:#333;color:#fff;border:1px solid #555;border-radius:4px;
+                     padding:4px 8px;font-size:14px;}
+            QComboBox{background:#333;color:#fff;border:1px solid #555;border-radius:4px;
+                      padding:4px 8px;font-size:14px;}
+            QCheckBox{font-size:14px;spacing:8px;}
+            QCheckBox::indicator{width:18px;height:18px;}
+            QProgressBar{background:#333;border:1px solid #555;border-radius:4px;
+                         text-align:center;color:#fff;font-size:12px;}
+            QProgressBar::chunk{background:#36c;border-radius:3px;}
+            QPushButton{font-size:14px;padding:8px 20px;border-radius:6px;font-weight:bold;}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(16)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        # --- 设置1：录制每段时长 ---
+        lbl1 = QLabel("1. 录制每段时长")
+        lbl1.setStyleSheet("font-weight:bold;font-size:15px;color:#58f;")
+        layout.addWidget(lbl1)
+
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("分段时长："))
+        self.spin_split = QSpinBox()
+        self.spin_split.setRange(1, 10)
+        self.spin_split.setValue(cfg.get("split_minute", 1))
+        self.spin_split.setSuffix(" 分钟")
+        row1.addWidget(self.spin_split)
+        row1.addStretch()
+        layout.addLayout(row1)
+
+        # --- 设置2：水印开关 ---
+        lbl2 = QLabel("2. 时间水印")
+        lbl2.setStyleSheet("font-weight:bold;font-size:15px;color:#58f;")
+        layout.addWidget(lbl2)
+
+        self.chk_watermark = QCheckBox("显示时间水印")
+        self.chk_watermark.setChecked(cfg.get("enable_watermark", True))
+        layout.addWidget(self.chk_watermark)
+
+        # --- 设置3：播放模式 ---
+        lbl3 = QLabel("3. 视频播放模式")
+        lbl3.setStyleSheet("font-weight:bold;font-size:15px;color:#58f;")
+        layout.addWidget(lbl3)
+
+        row3 = QHBoxLayout()
+        row3.addWidget(QLabel("播放方式："))
+        self.combo_play = QComboBox()
+        self.combo_play.addItems(["单次播放", "连续播放"])
+        if cfg.get("play_mode", "single") == "continuous":
+            self.combo_play.setCurrentIndex(1)
+        else:
+            self.combo_play.setCurrentIndex(0)
+        row3.addWidget(self.combo_play)
+        row3.addStretch()
+        layout.addLayout(row3)
+
+        # --- 设置4：TF卡空间 ---
+        lbl4 = QLabel("4. 存储空间")
+        lbl4.setStyleSheet("font-weight:bold;font-size:15px;color:#58f;")
+        layout.addWidget(lbl4)
+
+        # 获取磁盘空间
+        save_root = get_usb_dir()
+        total_gb, free_gb = self._get_disk_space(save_root)
+
+        # Windows 风格的容量显示
+        disk_info = QHBoxLayout()
+        disk_info.setSpacing(12)
+
+        # 图标区
+        icon_lbl = QLabel("💾")
+        icon_lbl.setStyleSheet("font-size:32px;")
+        icon_lbl.setFixedWidth(40)
+        disk_info.addWidget(icon_lbl)
+
+        # 详情区
+        detail = QVBoxLayout()
+        detail.setSpacing(4)
+
+        used_gb = total_gb - free_gb
+        used_pct = int((used_gb / total_gb * 100)) if total_gb > 0 else 0
+
+        # 容量文字
+        cap_text = f"可用 {free_gb:.1f} GB / 共 {total_gb:.1f} GB"
+        cap_lbl = QLabel(cap_text)
+        cap_lbl.setStyleSheet("font-size:13px;color:#ccc;")
+        detail.addWidget(cap_lbl)
+
+        # 进度条（蓝色 = 已用，灰色 = 剩余）
+        self.progress_disk = QProgressBar()
+        self.progress_disk.setRange(0, 100)
+        self.progress_disk.setValue(used_pct)
+        self.progress_disk.setFixedHeight(20)
+        self.progress_disk.setFormat(f"已用 {used_pct}%")
+        detail.addWidget(self.progress_disk)
+
+        # 路径
+        path_lbl = QLabel(f"路径: {save_root}")
+        path_lbl.setStyleSheet("font-size:11px;color:#888;")
+        detail.addWidget(path_lbl)
+
+        disk_info.addLayout(detail, 1)
+        layout.addLayout(disk_info)
+
+        # --- 保存按钮 ---
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
+        btn_cancel = QPushButton("取消")
+        btn_cancel.setStyleSheet("background:#555;color:#fff;")
+        btn_cancel.clicked.connect(self.reject)
+        btn_row.addWidget(btn_cancel)
+
+        btn_save = QPushButton("保存")
+        btn_save.setStyleSheet("background:#36c;color:#fff;")
+        btn_save.clicked.connect(self._save)
+        btn_row.addWidget(btn_save)
+
+        layout.addLayout(btn_row)
+
+    def _get_disk_space(self, path):
+        try:
+            stat = os.statvfs(path)
+            total = (stat.f_blocks * stat.f_frsize) / (1024 ** 3)
+            free = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+            return total, free
+        except Exception:
+            return 0, 0
+
+    def _save(self):
+        self.result_cfg = {
+            "split_minute": self.spin_split.value(),
+            "enable_watermark": self.chk_watermark.isChecked(),
+            "play_mode": "continuous" if self.combo_play.currentIndex() == 1 else "single",
+        }
+        self.accept()
 
 
 # ====================== 播放器覆盖层 ======================
@@ -216,11 +372,18 @@ class PlayerOverlay(QWidget):
 
         layout.addWidget(self.ctrl_bar)
 
-    def setup_video(self, path):
+    def setup_video(self, path, play_list=None):
         self._stop()
         self.mode = "video"
         self.playing = True
+        self._play_list = play_list or [path]
+        self._play_index = 0
+        self._open_file(path)
 
+    def _open_file(self, path):
+        """打开并开始播放单个视频文件"""
+        if self.cap:
+            self.cap.release()
         self.cap = cv2.VideoCapture(path)
         if not self.cap.isOpened():
             return
@@ -229,8 +392,9 @@ class PlayerOverlay(QWidget):
         self._total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         dur = self._total_frames / self._fps if self._fps else 0
 
-        self.info_label.setText(
-            f"  {os.path.basename(path)}  |  {self._fps:.0f}fps  |  {dur:.1f}s")
+        name = os.path.basename(path)
+        idx = f" [{self._play_index + 1}/{len(self._play_list)}]" if len(self._play_list) > 1 else ""
+        self.info_label.setText(f"  {name}{idx}  |  {self._fps:.0f}fps  |  {dur:.1f}s")
         self.info_label.setVisible(True)
         self.ctrl_bar.setVisible(True)
         self.btn_play.setText("\u23f8")
@@ -245,9 +409,10 @@ class PlayerOverlay(QWidget):
         self.show()
         self.raise_()
 
-        self.timer = QTimer()
-        self.timer.timeout.connect(self._next_frame)
-        self.timer.start(self.frame_ms)
+        if not self.timer or not self.timer.isActive():
+            self.timer = QTimer()
+            self.timer.timeout.connect(self._next_frame)
+            self.timer.start(self.frame_ms)
 
     def setup_photo(self, path):
         self._stop()
@@ -286,8 +451,17 @@ class PlayerOverlay(QWidget):
             return
         ret, frame = self.cap.read()
         if not ret:
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            self.seek_bar.setValue(0)
+            # 视频播放结束
+            play_list = getattr(self, '_play_list', [])
+            idx = getattr(self, '_play_index', 0)
+            if len(play_list) > 1 and idx + 1 < len(play_list):
+                # 连续播放：下一个视频
+                self._play_index = idx + 1
+                self._open_file(play_list[self._play_index])
+            else:
+                # 播放结束，停止
+                self.playing = False
+                self.btn_play.setText("\u25b6")
             return
         # 更新进度条
         cur = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
@@ -430,6 +604,17 @@ class MainWindow(QMainWindow):
 
         # 播放器覆盖层（叠加在 preview_frame 上）
         self.player_overlay = PlayerOverlay(self.preview_frame)
+
+        # 设置按钮（左上角齿轮图标，叠加在 preview_frame 上）
+        self.btn_settings = QPushButton("\u2699", self.preview_frame)
+        self.btn_settings.setFixedSize(48, 48)
+        self.btn_settings.setStyleSheet("""
+            QPushButton{background:rgba(0,0,0,150);color:#ccc;font-size:28px;
+                        border:none;border-radius:24px;}
+            QPushButton:hover{background:rgba(80,80,80,200);color:#fff;}
+        """)
+        self.btn_settings.move(6, 6)
+        self.btn_settings.clicked.connect(self.open_settings)
 
         left_layout.addWidget(self.preview_frame, 1)
 
@@ -788,11 +973,29 @@ class MainWindow(QMainWindow):
                 item.setData(Qt.UserRole, fpath)
                 self.photo_list.addItem(item)
 
+    def open_settings(self):
+        try:
+            dlg = SettingsDialog(self.cfg.copy(), self)
+            dlg.setModal(True)
+            if dlg.exec_() == QDialog.Accepted:
+                self.cfg.update(dlg.result_cfg)
+                save_config(self.cfg)
+                self.status_label.setText("设置已保存")
+        except Exception as e:
+            self.status_label.setText(f"设置出错: {e}")
+
     def play_video(self, item):
         fpath = item.data(Qt.UserRole)
         if not fpath or not os.path.exists(fpath):
             return
-        self.player_overlay.setup_video(fpath)
+        # 连续播放：收集同目录所有视频
+        play_list = []
+        if self.cfg.get("play_mode") == "continuous":
+            for i in range(self.video_list.count()):
+                play_list.append(self.video_list.item(i).data(Qt.UserRole))
+        else:
+            play_list = [fpath]
+        self.player_overlay.setup_video(play_list[0] if play_list else fpath, play_list)
 
     def view_photo(self, item):
         fpath = item.data(Qt.UserRole)

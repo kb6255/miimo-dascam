@@ -4,5 +4,6 @@
   "split_minute": 1,
   "enable_watermark": true,
   "cycle_storage_gb": 30,
-  "warn_space_gb": 5
+  "warn_space_gb": 5,
+  "play_mode": "single"
 }
