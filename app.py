@@ -9,7 +9,7 @@ from datetime import datetime
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QLabel, QHBoxLayout, QVBoxLayout, QWidget,
     QPushButton, QListWidget, QListWidgetItem, QFrame, QSlider, QStyle,
-    QDialog, QSpinBox, QCheckBox, QProgressBar, QComboBox, QMenu
+    QDialog, QSpinBox, QCheckBox, QProgressBar, QComboBox, QMenu, QMessageBox
 )
 from PyQt5.QtGui import QImage, QPixmap, QFont
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
@@ -243,6 +243,22 @@ class SettingsDialog(QDialog):
         disk_info.addLayout(detail, 1)
         layout.addLayout(disk_info)
 
+        # 清空存储空间按钮
+        btn_clear_row = QHBoxLayout()
+        btn_clear_row.addStretch()
+
+        btn_clear_storage = QPushButton("清空存储空间")
+        btn_clear_storage.setFixedHeight(40)
+        btn_clear_storage.setStyleSheet("""
+            QPushButton{background:#c33;color:#fff;font-size:14px;font-weight:bold;
+                        border-radius:6px;padding:0 16px;}
+            QPushButton:hover{background:#e44;}
+        """)
+        btn_clear_storage.clicked.connect(lambda: self._clear_storage(save_root))
+        btn_clear_row.addWidget(btn_clear_storage)
+        btn_clear_row.addStretch()
+        layout.addLayout(btn_clear_row)
+
         # --- 保存按钮 ---
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -267,6 +283,142 @@ class SettingsDialog(QDialog):
             return total, free
         except Exception:
             return 0, 0
+
+    def _clear_storage(self, save_root):
+        """安全清空存储空间，只删除视频文件，保留目录结构"""
+        from PyQt5.QtWidgets import QMessageBox
+        
+        def create_styled_msgbox(parent, title, text, icon, buttons):
+            """创建带样式的 QMessageBox"""
+            from PyQt5.QtWidgets import QPushButton as QPushButtonType
+            
+            msg_box = QMessageBox(parent)
+            msg_box.setWindowTitle(title)
+            msg_box.setText(text)
+            msg_box.setIcon(icon)
+            msg_box.setStandardButtons(buttons)
+            
+            # 设置对话框样式
+            msg_box.setStyleSheet("""
+                QMessageBox {
+                    background-color: #222;
+                }
+                QLabel {
+                    color: #fff;
+                    font-size: 14px;
+                    min-width: 300px;
+                }
+            """)
+            
+            # 使用 findChildren 查找所有 QPushButton 并设置样式
+            for button in msg_box.findChildren(QPushButtonType):
+                button.setStyleSheet("""
+                    QPushButton {
+                        background-color: #36c;
+                        color: white;
+                        border: none;
+                        border-radius: 4px;
+                        padding: 8px 20px;
+                        font-size: 14px;
+                        font-weight: bold;
+                        min-width: 80px;
+                    }
+                    QPushButton:hover {
+                        background-color: #48e;
+                    }
+                    QPushButton:pressed {
+                        background-color: #25a;
+                    }
+                """)
+            
+            return msg_box
+        
+        # 确认对话框
+        msg_box = create_styled_msgbox(
+            self,
+            "确认清空",
+            "确定要清空所有存储的视频吗？\n\n此操作将删除：\n- 所有普通录像文件 (.mp4)\n- 所有截图文件 (.jpg, .png)\n\n注意：锁定的视频将被保留。",
+            QMessageBox.Question,
+            QMessageBox.Yes | QMessageBox.No
+        )
+        msg_box.setDefaultButton(QMessageBox.No)
+        
+        reply = msg_box.exec_()
+        
+        if reply != QMessageBox.Yes:
+            return
+        
+        deleted_count = 0
+        deleted_size = 0
+        
+        try:
+            # 1. 删除普通录像文件（不以LOCK_开头的.mp4文件）
+            if os.path.exists(save_root):
+                for fname in os.listdir(save_root):
+                    if fname.endswith(".mp4") and not fname.startswith("LOCK_"):
+                        fpath = os.path.join(save_root, fname)
+                        try:
+                            fsize = os.path.getsize(fpath)
+                            os.remove(fpath)
+                            deleted_count += 1
+                            deleted_size += fsize
+                        except Exception:
+                            pass
+            
+            # 2. 删除截图文件
+            photos_dir = os.path.join(save_root, "photos")
+            if os.path.exists(photos_dir):
+                for fname in os.listdir(photos_dir):
+                    if fname.endswith((".jpg", ".png")):
+                        fpath = os.path.join(photos_dir, fname)
+                        try:
+                            fsize = os.path.getsize(fpath)
+                            os.remove(fpath)
+                            deleted_count += 1
+                            deleted_size += fsize
+                        except Exception:
+                            pass
+            
+            # 更新显示
+            deleted_mb = deleted_size / (1024 * 1024)
+            msg_box = create_styled_msgbox(
+                self,
+                "清空完成",
+                f"已成功删除 {deleted_count} 个文件\n释放空间: {deleted_mb:.1f} MB",
+                QMessageBox.Information,
+                QMessageBox.Ok
+            )
+            msg_box.exec_()
+            
+            # 刷新磁盘空间显示
+            total_gb, free_gb = self._get_disk_space(save_root)
+            used_gb = total_gb - free_gb
+            used_pct = int((used_gb / total_gb * 100)) if total_gb > 0 else 0
+            
+            self.progress_disk.setValue(used_pct)
+            self.progress_disk.setFormat(f"已用 {used_pct}%")
+            
+            # 更新容量文字（找到并更新cap_lbl）
+            for i in range(self.layout().count()):
+                item = self.layout().itemAt(i)
+                if item and item.layout():
+                    for j in range(item.layout().count()):
+                        child = item.layout().itemAt(j)
+                        if child and child.widget() and isinstance(child.widget(), QLabel):
+                            lbl = child.widget()
+                            if "可用" in lbl.text() and "GB" in lbl.text():
+                                lbl.setText(f"可用 {free_gb:.1f} GB / 共 {total_gb:.1f} GB")
+                                break
+            
+        except Exception as e:
+            msg_box = create_styled_msgbox(
+                self,
+                "清空失败",
+                f"清空存储空间时出错：{str(e)}",
+                QMessageBox.Warning,
+                QMessageBox.Ok
+            )
+            msg_box.exec_()
 
     def _save(self):
         self.result_cfg = {
@@ -1066,7 +1218,10 @@ class MainWindow(QMainWindow):
         try:
             dlg = SettingsDialog(self.cfg.copy(), self)
             dlg.setModal(True)
-            if dlg.exec_() == QDialog.Accepted:
+            dlg.exec_()
+            # 无论设置是否保存，都刷新文件列表（因为可能在设置中清空了存储）
+            self.refresh_files()
+            if dlg.result_cfg:
                 self.cfg.update(dlg.result_cfg)
                 save_config(self.cfg)
                 self.status_label.setText("设置已保存")
@@ -1126,6 +1281,11 @@ if __name__ == "__main__":
         QMainWindow{background:#000;}
         QWidget{background:#1a1a1a;}
         QPushButton{font-size:14px;}
+        QMessageBox{background:#222;}
+        QMessageBox QLabel{color:#fff;font-size:14px;}
+        QMessageBox QPushButton{background:#36c;color:white;border:none;border-radius:4px;padding:8px 20px;font-weight:bold;}
+        QMessageBox QPushButton:hover{background:#48e;}
+        QMessageBox QPushButton:pressed{background:#25a;}
     """)
     win = MainWindow()
     sys.exit(app.exec_())
