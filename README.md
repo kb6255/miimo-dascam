@@ -269,6 +269,111 @@ A: 操作步骤：
 
 ---
 
+## 部署与批量烧录
+
+### 方案一：一键配置（最简单）
+
+适用于单台或少量树莓派的部署：
+
+```bash
+# 1. 将项目文件复制到树莓派
+scp -r /home/kongbin/usbcamra pi@raspberrypi:/home/pi/
+
+# 2. 在树莓派上运行
+cd /home/pi/usbcamra
+sudo bash setup.sh
+```
+
+**配置内容：**
+- ✓ 开机自启动 dashcam 服务
+- ✓ 静默启动（隐藏 logo、控制台输出）
+- ✓ 禁用 Plymouth 启动动画
+- ✓ 自动登录 pi 用户
+
+### 方案二：自定义镜像（批量烧录推荐）
+
+适用于批量生产，一次构建，无限刷机：
+
+#### 步骤 1：准备基础镜像
+```bash
+# 下载官方树莓派 OS 镜像
+wget https://downloads.raspberrypi.com/raspios_arm64/images/raspios_arm64-2024-11-19/2024-11-19-raspios-bookworm-arm64.img.xz
+
+# 解压
+xz -d 2024-11-19-raspios-bookworm-arm64.img.xz
+```
+
+#### 步骤 2：构建自定义镜像
+```bash
+cd /home/kongbin/usbcamra/deploy
+sudo bash create-image.sh ../2024-11-19-raspios-bookworm-arm64.img
+```
+
+#### 步骤 3：批量刷机
+```bash
+# 使用 dd 刷入 TF 卡
+sudo dd if=dashcam-os.img of=/dev/sdX bs=4M status=progress
+
+# 或使用 Raspberry Pi Imager
+# 选择 "Use custom" → 选择 dashcam-os.img
+```
+
+#### 步骤 4：首次启动
+- 插入 TF 卡到树莓派
+- 通电启动
+- 系统自动运行 dashcam 程序
+- **无需任何配置**
+
+### 方案三：使用烧录脚本（最省事）
+
+```bash
+cd /home/kongbin/usbcamra/deploy
+sudo bash deploy.sh --app-dir /home/pi/dashcam --user pi
+```
+
+---
+
+## 文件结构
+
+### 项目文件
+```
+usbcamra/
+├── app.py              ← 主程序
+├── config.json         ← 配置文件
+├── run.sh              ← 启动脚本
+├── setup.sh            ← 一键配置脚本
+├── requirements.txt    ← Python 依赖
+├── README.md           ← 本文档
+└── deploy/             ← 部署工具
+    ├── deploy.sh       ← 完整部署脚本
+    ├── create-image.sh ← 自定义镜像构建
+    └── first-boot.sh   ← 首次启动脚本
+```
+
+### 系统配置文件（部署后）
+```
+/etc/systemd/system/dashcam.service    ← systemd 服务
+/home/pi/.config/autostart/dashcam.desktop  ← 桌面自启动
+/boot/firmware/cmdline.txt             ← 内核启动参数（静默）
+```
+
+---
+
+## 静默启动配置说明
+
+以下参数在 `/boot/firmware/cmdline.txt` 中配置：
+
+| 参数 | 作用 |
+|------|------|
+| `quiet` | 减少启动日志输出 |
+| `splash` | 启用启动画面（被 Plymouth 控制） |
+| `plymouth.ignore-serial-consoles` | 忽略串口控制台的 Plymouth |
+| `logo.nologo` | 禁用树莓派彩虹 logo |
+| `vt.global_cursor_default=0` | 隐藏光标 |
+| `console=tty1` | 仅保留 TTY1 控制台 |
+
+---
+
 ## 注意事项
 
 1. **首次使用**：请确保 USB 存储设备已正确挂载且有写入权限
