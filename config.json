@@ -3,7 +3,7 @@
   "video_height": 720,
   "split_minute": 1,
   "enable_watermark": true,
-  "cycle_storage_gb": 30,
+  "cycle_storage_gb": 256,
   "warn_space_gb": 5,
-  "play_mode": "single"
+  "play_mode": "continuous"
 }

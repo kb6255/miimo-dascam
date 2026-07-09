@@ -432,6 +432,9 @@ class SettingsDialog(QDialog):
 # ====================== 播放器覆盖层 ======================
 class PlayerOverlay(QWidget):
     """覆盖在监控画面上的视频/图片播放器"""
+    file_changed = pyqtSignal(str)  # 播放新文件时发出
+    playback_finished = pyqtSignal()  # 播放结束时发出
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setVisible(False)
@@ -442,6 +445,7 @@ class PlayerOverlay(QWidget):
         self._seeking = False  # 用户正在拖动进度条
         self._total_frames = 0
         self._fps = 30
+        self._current_path = ""
         self._build_ui()
 
     def _build_ui(self):
@@ -540,7 +544,12 @@ class PlayerOverlay(QWidget):
             self.cap.release()
         self.cap = cv2.VideoCapture(path)
         if not self.cap.isOpened():
+            self.cap = None
+            # 文件无法打开，尝试播放下一个
+            self._skip_to_next()
             return
+        self._current_path = path
+        self.file_changed.emit(path)  # 通知外部当前播放文件
         self._fps = self.cap.get(cv2.CAP_PROP_FPS) or 30
         self.frame_ms = int(1000 / self._fps)
         self._total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -563,10 +572,33 @@ class PlayerOverlay(QWidget):
         self.show()
         self.raise_()
 
-        if not self.timer or not self.timer.isActive():
-            self.timer = QTimer()
-            self.timer.timeout.connect(self._next_frame)
-            self.timer.start(self.frame_ms)
+        # 确保定时器正确启动
+        if self.timer:
+            self.timer.stop()
+            self.timer.timeout.disconnect()
+        self.timer = QTimer()
+        self.timer.timeout.connect(self._next_frame)
+        self.timer.start(self.frame_ms)
+
+    def _skip_to_next(self):
+        """跳转到下一个视频"""
+        play_list = getattr(self, '_play_list', [])
+        idx = getattr(self, '_play_index', 0)
+        # 尝试下一个有效视频
+        start_idx = idx
+        while True:
+            next_idx = idx + 1 if idx + 1 < len(play_list) else 0
+            if next_idx == start_idx:
+                # 已经遍历完所有视频
+                break
+            if next_idx < len(play_list) and os.path.exists(play_list[next_idx]):
+                self._play_index = next_idx
+                self._open_file(play_list[next_idx])
+                return
+            idx = next_idx
+        # 没有有效视频，关闭播放器
+        self._stop()
+        self.setVisible(False)
 
     def setup_photo(self, path):
         self._stop()
@@ -613,21 +645,20 @@ class PlayerOverlay(QWidget):
             # 视频播放结束
             play_list = getattr(self, '_play_list', [])
             idx = getattr(self, '_play_index', 0)
-            if len(play_list) > 1 and idx + 1 < len(play_list):
+            print(f"[DEBUG] video ended, idx: {idx}, play_list count: {len(play_list)}")
+            print(f"[DEBUG] current video: {os.path.basename(play_list[idx]) if idx < len(play_list) else 'None'}")
+            if idx + 1 < len(play_list):
                 # 连续播放：下一个视频
                 self._play_index = idx + 1
+                print(f"[DEBUG] next video: {os.path.basename(play_list[self._play_index])}")
                 self._open_file(play_list[self._play_index])
-            elif len(play_list) > 1:
-                # 连续播放：全部播完，回到第一个循环
-                self._play_index = 0
-                self._open_file(play_list[0])
             else:
-                # 单次播放：停止，回到起始位置以便再次播放
+                # 播放结束（单次播放或连续播放到最后一段）
+                print(f"[DEBUG] playback finished, stopping")
                 self.playing = False
                 self.btn_play.setText("\u25b6")
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                self.seek_bar.setValue(0)
-                self.time_current.setText("00:00")
+                self._stop()
+                self.playback_finished.emit()
             return
         # 更新进度条
         cur = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
@@ -679,6 +710,7 @@ class PlayerOverlay(QWidget):
 
     def _close(self):
         self._stop()
+        self._current_path = ""
         self.setVisible(False)
         # 恢复监控画面
         main_win = self.window()
@@ -777,6 +809,7 @@ class MainWindow(QMainWindow):
 
         # 播放器覆盖层（叠加在 preview_frame 上）
         self.player_overlay = PlayerOverlay(self.preview_frame)
+        self.player_overlay.file_changed.connect(self._highlight_playing)
 
         # 设置按钮（左上角齿轮图标，叠加在 preview_frame 上）
         self.btn_settings = QPushButton("\u2699", self.preview_frame)
@@ -986,7 +1019,7 @@ class MainWindow(QMainWindow):
         cv2.rectangle(small, (0, 0), (small_w - 1, small_h - 1), (255, 255, 255), 3)
         margin = small_h // 8
         main[margin:margin + small_h, self.W - small_w:self.W, :] = small
-        mode_text = "FWD" if self.car_mode == 0 else "REV"
+        mode_text = "FWD" if self.car_mode == 0 else "BACK"
         cv2.putText(main, mode_text, (self.W - 80, self.H - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 0), 2)
         return self.add_watermark(main)
 
@@ -1112,7 +1145,27 @@ class MainWindow(QMainWindow):
 
     def hide_gallery(self):
         self.player_overlay._close()
+        self._clear_highlight()
         self.gallery_panel.setVisible(False)
+
+    def _clear_highlight(self):
+        """清除所有高亮"""
+        for i in range(self.video_list.count()):
+            item = self.video_list.item(i)
+            item.setBackground(Qt.transparent)
+            item.setForeground(Qt.white)
+
+    def _highlight_playing(self, path):
+        """高亮显示当前播放的视频"""
+        for i in range(self.video_list.count()):
+            item = self.video_list.item(i)
+            if item.data(Qt.UserRole) == path:
+                item.setBackground(Qt.darkGreen)
+                item.setForeground(Qt.white)
+                self.video_list.setCurrentItem(item)
+            else:
+                item.setBackground(Qt.transparent)
+                item.setForeground(Qt.white)
 
     def _video_ctx_menu(self, pos):
         item = self.video_list.itemAt(pos)
@@ -1191,8 +1244,11 @@ class MainWindow(QMainWindow):
                 "border-radius:4px;padding:0 16px;}")
 
     def refresh_files(self):
+        # 保存当前高亮的路径
+        current_highlight = self.player_overlay._current_path if hasattr(self, 'player_overlay') else ""
         self.video_list.clear()
         self.photo_list.clear()
+        # 正常视频：上新下旧（最新在最上面，最旧在最下面）
         if os.path.exists(self.save_root):
             for f in sorted([f for f in os.listdir(self.save_root) if f.endswith(".mp4")], reverse=True):
                 fpath = os.path.join(self.save_root, f)
@@ -1200,6 +1256,7 @@ class MainWindow(QMainWindow):
                 item = QListWidgetItem(f"{f}  ({size_mb:.1f}MB)")
                 item.setData(Qt.UserRole, fpath)
                 self.video_list.addItem(item)
+        # 锁定视频放在最下面（上新下旧）
         if os.path.exists(self.lock_root):
             for f in sorted([f for f in os.listdir(self.lock_root) if f.endswith(".mp4")], reverse=True):
                 fpath = os.path.join(self.lock_root, f)
@@ -1207,6 +1264,9 @@ class MainWindow(QMainWindow):
                 item = QListWidgetItem(f"[锁定] {f}  ({size_mb:.1f}MB)")
                 item.setData(Qt.UserRole, fpath)
                 self.video_list.addItem(item)
+        # 恢复高亮
+        if current_highlight:
+            self._highlight_playing(current_highlight)
         if os.path.exists(self.photos_dir):
             for f in sorted([f for f in os.listdir(self.photos_dir) if f.endswith((".jpg", ".png"))], reverse=True):
                 fpath = os.path.join(self.photos_dir, f)
@@ -1232,14 +1292,27 @@ class MainWindow(QMainWindow):
         fpath = item.data(Qt.UserRole)
         if not fpath or not os.path.exists(fpath):
             return
-        # 连续播放：收集同目录所有视频
-        play_list = []
+        # 排除正在录制的视频
+        if fpath == self.current_video_path:
+            self.status_label.setText("该视频正在录制中，无法播放")
+            return
+        # 连续播放：从点选的视频开始，向上播放已完成的视频
+        play_list = [fpath]
         if self.cfg.get("play_mode") == "continuous":
+            # video_list 是上新下旧，找到点选位置，往上播放（更新的已完成视频）
             for i in range(self.video_list.count()):
-                play_list.append(self.video_list.item(i).data(Qt.UserRole))
-        else:
-            play_list = [fpath]
-        self.player_overlay.setup_video(play_list[0] if play_list else fpath, play_list)
+                path = self.video_list.item(i).data(Qt.UserRole)
+                if path == fpath:
+                    # 从点选位置往上（索引减小），即更新的视频
+                    play_list = []
+                    for j in range(i, -1, -1):
+                        p = self.video_list.item(j).data(Qt.UserRole)
+                        # 跳过正在录制的视频
+                        if p and os.path.exists(p) and p != self.current_video_path:
+                            play_list.append(p)
+                    break
+        if play_list:
+            self.player_overlay.setup_video(play_list[0], play_list)
 
     def view_photo(self, item):
         fpath = item.data(Qt.UserRole)
