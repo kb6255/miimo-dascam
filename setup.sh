@@ -70,7 +70,10 @@ echo "[4/4] 配置开机自启动..."
 
 chmod +x "$APP_DIR/run.sh"
 
-# systemd 服务
+# systemd 服务（自动获取当前用户名）
+APP_USER=$(logname 2>/dev/null || whoami)
+APP_HOME=$(eval echo "~$APP_USER")
+
 cat > /etc/systemd/system/dashcam.service << SERVICEEOF
 [Unit]
 Description=DashCam
@@ -79,12 +82,13 @@ Wants=graphical.target
 
 [Service]
 Type=simple
-User=pi
+User=$APP_USER
 Environment=DISPLAY=:0
 Environment=QT_QPA_PLATFORM=xcb
-Environment=XAUTHORITY=/home/pi/.Xauthority
+Environment=XAUTHORITY=$APP_HOME/.Xauthority
+Environment=WAYLAND_DISPLAY=wayland-0
 WorkingDirectory=$APP_DIR
-ExecStartPre=/bin/sleep 3
+ExecStartPre=/bin/sleep 5
 ExecStart=/bin/bash $APP_DIR/run.sh
 Restart=on-failure
 RestartSec=5

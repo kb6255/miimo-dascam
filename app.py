@@ -21,7 +21,6 @@ DEFAULT_CFG = {
     "video_height": 720,
     "split_minute": 1,
     "enable_watermark": True,
-    "cycle_storage_gb": 30,
     "warn_space_gb": 5,
     "play_mode": "single",
 }
@@ -74,20 +73,39 @@ def cover_scale(pixmap, target_w, target_h):
     return scaled.copy(x, y, target_w, target_h)
 
 
-def clean_old_videos(save_root, limit_gb):
-    all_videos = []
-    for fname in os.listdir(save_root):
-        if fname.endswith(".mp4") and not fname.startswith("LOCK_"):
-            fpath = os.path.join(save_root, fname)
-            fsize = os.path.getsize(fpath)
-            ctime = os.path.getctime(fpath)
-            all_videos.append((ctime, fpath, fsize))
-    all_videos.sort()
-    total_gb = sum(v[2] for v in all_videos) / (1024 ** 3)
-    while total_gb > limit_gb and all_videos:
-        _, fpath, fsize = all_videos.pop(0)
-        os.remove(fpath)
-        total_gb -= fsize / (1024 ** 3)
+def clean_old_videos(save_root, target_free_gb):
+    """循环录制：删除最旧的非锁定视频，直到剩余空间 >= target_free_gb"""
+    for _ in range(100):  # 最多清理100轮，防止死循环
+        free_gb = _get_free_space_gb(save_root)
+        if free_gb >= target_free_gb:
+            break
+        # 收集所有非锁定视频，按创建时间排序（最旧在前）
+        all_videos = []
+        for fname in os.listdir(save_root):
+            if fname.endswith(".mp4") and not fname.startswith("LOCK_"):
+                fpath = os.path.join(save_root, fname)
+                try:
+                    fsize = os.path.getsize(fpath)
+                    ctime = os.path.getctime(fpath)
+                    all_videos.append((ctime, fpath, fsize))
+                except OSError:
+                    pass
+        if not all_videos:
+            break
+        all_videos.sort()
+        _, fpath, fsize = all_videos[0]
+        try:
+            os.remove(fpath)
+        except OSError:
+            pass
+
+
+def _get_free_space_gb(path):
+    try:
+        stat = os.statvfs(path)
+        return (stat.f_frsize * stat.f_bavail) / (1024 ** 3)
+    except Exception:
+        return 0
 
 # ====================== 摄像头线程 ======================
 class CameraThread(QThread):
@@ -1114,6 +1132,13 @@ class MainWindow(QMainWindow):
         if self.is_rec:
             self.status_label.setStyleSheet("color:red;font-size:12px;font-weight:bold;padding:4px;")
             self.status_label.setText(f"录像中: {self.current_video_path}")
+        # 录完新视频后立即检查空间，不够则删旧视频
+        try:
+            free_gb = _get_free_space_gb(self.save_root)
+            if free_gb < self.cfg["warn_space_gb"]:
+                clean_old_videos(self.save_root, self.cfg["warn_space_gb"])
+        except Exception:
+            pass
 
     # ---- 模式 ----
     def switch_mode(self):
@@ -1323,12 +1348,11 @@ class MainWindow(QMainWindow):
     # ---- 磁盘 ----
     def check_disk(self):
         try:
-            stat = os.statvfs(self.save_root)
-            free_gb = (stat.f_frsize * stat.f_bavail) / (1024 ** 3)
+            free_gb = _get_free_space_gb(self.save_root)
             if free_gb < self.cfg["warn_space_gb"]:
                 self.status_label.setStyleSheet("color:#fa0;font-size:12px;font-weight:bold;padding:4px;")
                 self.status_label.setText(f"空间不足 {self.cfg['warn_space_gb']}GB！剩余 {free_gb:.1f}GB")
-            clean_old_videos(self.save_root, self.cfg["cycle_storage_gb"])
+                clean_old_videos(self.save_root, self.cfg["warn_space_gb"])
         except Exception:
             pass
 
